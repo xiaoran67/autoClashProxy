@@ -1,0 +1,121 @@
+name: Update IPTV
+
+on:
+  schedule:
+    - cron: '0 0 * * *'  # 每天凌晨执行
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.13'
+
+      - name: Check Pipfile format
+        run: |
+          if [ -f "Pipfile" ]; then
+            echo "Starting to check Pipfile format..."
+            pip install toml
+            set +e
+            python -c "import toml; toml.load(open('Pipfile'))"
+            check_status=$?
+            set -e
+            if [ $check_status -eq 0 ]; then
+              echo "Pipfile format is valid."
+            else
+              echo "Pipfile format is invalid. Here is the content of Pipfile:"
+              cat Pipfile
+              exit 1
+            fi
+          else
+            echo "Pipfile not found in the project directory. Please ensure it exists."
+            exit 1
+          fi
+
+      - name: Install pipenv
+        run: |
+          echo "Installing pipenv..."
+          pip install pipenv
+          if [ $? -ne 0 ]; then
+            echo "Failed to install pipenv. Please check the network or Python environment."
+            exit 1
+          fi
+
+      - name: Install dependencies
+        run: |
+          echo "Installing project dependencies..."
+          pipenv install --deploy
+          if [ $? -ne 0 ]; then
+            echo "Failed to install project dependencies. Check Pipfile or network."
+            exit 1
+          fi
+
+      - name: Install FFmpeg
+        run: |
+          echo "Installing FFmpeg..."
+          sudo apt-get update
+          sudo apt-get install -y ffmpeg
+          if [ $? -ne 0 ]; then
+            echo "Failed to install FFmpeg. Check system permissions or network."
+            exit 1
+          fi
+
+      - name: Generate M3U and TXT files
+        run: |
+          if [ -f "main.py" ]; then
+            echo "Running main.py to generate M3U and TXT files..."
+            pipenv run python main.py 2>&1 | tee main.log
+            if [ $? -ne 0 ]; then
+              echo "Failed to generate M3U and TXT files. Check main.py or dependencies."
+              echo "Check main.log for detailed error messages."
+              cat main.log
+              exit 1
+            fi
+            if [ ! -f "output/result.m3u" ] || [ ! -f "output/result.txt" ]; then
+              echo "M3U and/or TXT files were not generated. Check main.log for details."
+              cat main.log
+              exit 1
+            fi
+          else
+            echo "Script file main.py not found. Please ensure it exists."
+            exit 1
+          fi
+
+      - name: Commit and push changes
+        run: |
+          git config --local user.email "action@github.com"
+          git config --local user.name "GitHub Action"
+          files_to_add=()
+          if [ -f "output/result.m3u" ]; then
+            files_to_add+=("output/result.m3u")
+          else
+            echo "File output/result.m3u not found. Skipping it."
+          fi
+          if [ -f "output/result.txt" ]; then
+            files_to_add+=("output/result.txt")
+          else
+            echo "File output/result.txt not found. Skipping it."
+          fi
+          if [ ${#files_to_add[@]} -gt 0 ]; then
+            git add "${files_to_add[@]}"
+            if git diff --staged --quiet; then
+              echo "No changes to commit in output files."
+            else
+              echo "Committing and pushing changes to the repository..."
+              git commit -m "✔️ $(TZ='Asia/Shanghai' date +'%Y-%m-%d %H:%M:%S')"
+              git push
+              if [ $? -ne 0 ]; then
+                echo "Failed to push changes to the repository. Check Git configuration or permissions."
+                exit 1
+              fi
+            fi
+          else
+            echo "No files to add. Skipping commit and push."
+          fi    
